@@ -1,53 +1,36 @@
-# Eversolo Play History v0.1
+# Eversolo Play History v0.2 Beta
 
-Purpose-built playback history logger for Eversolo DMP-A6.
+Playback-history logger for Eversolo DMP-A6. This beta is intentionally installed side-by-side with v0.1 so the working v0.1 installation does not have to be deleted while v0.2 storage is tested.
 
-## Confirmed A6 API behavior
+## API
 
-Endpoint used by the app:
-
-- Primary (on the A6 itself): `http://127.0.0.1:9529/ZidooMusicControl/v2/getState`
+- Primary: `http://127.0.0.1:9529/ZidooMusicControl/v2/getState`
 - Fallback: `http://192.168.1.9:9529/ZidooMusicControl/v2/getState`
 
-Observed on DMP-A6 firmware v1.5.75:
+## Playback rules
 
-- `state=3` while playing
-- `position` and `duration` are milliseconds
-- `playingMusic` includes `id`, `title`, `artist`, `album`, `extension`, `codec`, and `sampleRate`
-- `everSoloPlayInfo.playStatus=1` while playing
-- `everSoloPlayInfo.playTypeSubtitle=LOCAL` for local playback
+- `state=3`: accumulate listening time
+- `state=4`: pause, keep the session open
+- idle/stop >5 seconds: close session
+- qualified play: >=30 seconds OR >=50% of duration
+- skip: <10 seconds listened
+- completed: >=90% position reached
 
-## v0.1 behavior
+## v0.2 storage
 
-- Runs as a foreground service on the A6 itself
-- Polls playback state every second
-- Automatically resumes after device reboot
-- Uses SQLite as the authoritative history database
-- Automatically refreshes CSV after each closed listening session
-- Pauses do not split a session
-- Stop/idle closes a session after 5 seconds
-- Qualified play: >=30 seconds OR >=50% of duration
-- Skip: <10 seconds of actual listening time
-- Completed: >=90% position reached
+The app first searches the music volume containing `Music`, including the known A6 volume `E6B9-EC04`.
 
-## Storage
+Preferred persistent files:
 
-Primary CSV export target:
+- `/.EversoloManager/play_history.db`
+- `/.EversoloManager/play_history.csv`
 
-`/sdcard/EversoloHistory/history.csv`
+The app also keeps an internal SQLite copy. At startup it synchronizes the internal DB and the persistent DB. On a future device such as an A8, installing v0.2 with the same music disk can restore the internal history from `play_history.db`.
 
-If Android blocks public external storage, the exporter falls back to the app's external-files folder.
+If direct music-volume access is blocked, the UI shows the fallback path/error so it can be diagnosed without losing current-session logging.
 
-The SQLite DB remains in Android app-internal storage:
+## Installation note
 
-`eversolo_history.db`
+v0.2 uses a separate application ID from v0.1 because the original v0.1 GitHub Actions debug signing key was ephemeral. That allows v0.1 to remain installed while v0.2 is verified. Stop v0.1 monitoring before starting v0.2 to avoid duplicate logging.
 
-## Building
-
-This source is intentionally dependency-light. Android Studio can open the root folder and build `app` directly.
-
-A GitHub Actions workflow is also included. It installs Gradle 8.7 and builds a debug APK automatically.
-
-## First installation
-
-Launch the app once after sideloading. It starts the monitor immediately. After that, the boot receiver will restart monitoring whenever the A6 boots, unless monitoring was explicitly stopped from the app.
+From v0.2 onward the workflow caches the debug keystore with a fixed cache key so subsequent v0.2 builds can update the installed beta without changing the signing key.
