@@ -23,6 +23,7 @@ public class MainActivity extends Activity {
     private TextView track;
     private TextView count;
     private TextView error;
+    private TextView storage;
     private final Handler handler = new Handler();
     private HistoryDb db;
 
@@ -31,6 +32,7 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         db = new HistoryDb(this);
         setContentView(buildUi());
+        requestStoragePermissionIfNeeded();
         startMonitor();
         handler.post(refreshLoop);
     }
@@ -42,7 +44,7 @@ public class MainActivity extends Activity {
         root.setPadding(p, p, p, p);
 
         TextView title = new TextView(this);
-        title.setText("Eversolo Play History v0.1");
+        title.setText("Eversolo Play History v0.2 Beta");
         title.setTextSize(26);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         root.addView(title);
@@ -56,7 +58,8 @@ public class MainActivity extends Activity {
         status = field(root, "Status");
         track = field(root, "Current track");
         count = field(root, "Saved sessions");
-        error = field(root, "Last API error");
+        storage = field(root, "Persistent database");
+        error = field(root, "Last error");
 
         Button start = button("Start monitoring");
         start.setOnClickListener(v -> startMonitor());
@@ -75,8 +78,15 @@ public class MainActivity extends Activity {
         export.setOnClickListener(v -> exportCsv());
         root.addView(export);
 
+        Button retryStorage = button("Retry music-disk storage");
+        retryStorage.setOnClickListener(v -> {
+            db.ensureMirror();
+            exportCsv();
+        });
+        root.addView(retryStorage);
+
         TextView note = new TextView(this);
-        note.setText("Storage:\n• SQLite database stays inside the A6 app storage.\n• CSV is automatically refreshed after each completed listening session.\n• Primary CSV path: /sdcard/EversoloHistory/history.csv\n\nRules:\n• state=3 = listening time accumulates\n• state=4 = paused, session stays open\n• idle/stop >5 sec = session closes\n• qualified play = 30 sec OR 50% of track\n• skip = under 10 sec\n• completed = 90% position reached");
+        note.setText("v0.2 storage target:\n• Music disk: /.EversoloManager/play_history.db\n• CSV: /.EversoloManager/play_history.csv\n• Internal DB is kept as a safety copy.\n• If this app is installed on a future A8 with the same music disk, it can restore its internal DB from play_history.db.\n\nRules:\n• state=3 = listening time accumulates\n• state=4 = paused, session stays open\n• idle/stop >5 sec = session closes\n• qualified play = 30 sec OR 50% of track\n• skip = under 10 sec\n• completed = 90% position reached");
         note.setTextSize(14);
         note.setPadding(0, dp(18), 0, 0);
         root.addView(note);
@@ -112,6 +122,13 @@ public class MainActivity extends Activity {
         return b;
     }
 
+    private void requestStoragePermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT >= 23 &&
+                checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, 50);
+        }
+    }
+
     private void startMonitor() {
         getSharedPreferences(HistoryService.PREF, MODE_PRIVATE).edit()
                 .putBoolean(HistoryService.KEY_ENABLED, true).apply();
@@ -121,12 +138,8 @@ public class MainActivity extends Activity {
     }
 
     private void exportCsv() {
-        if (Build.VERSION.SDK_INT >= 23 && Build.VERSION.SDK_INT <= 29 &&
-                checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, 50);
-            return;
-        }
         try {
+            db.ensureMirror();
             File f = CsvExporter.export(this, db);
             Toast.makeText(this, "CSV: " + f.getAbsolutePath(), Toast.LENGTH_LONG).show();
         } catch (Exception e) {
@@ -137,8 +150,11 @@ public class MainActivity extends Activity {
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode == 50 && grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-            exportCsv();
+        if (requestCode == 50) {
+            db.ensureMirror();
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                exportCsv();
+            }
         }
     }
 
@@ -150,10 +166,16 @@ public class MainActivity extends Activity {
                     .getString(HistoryService.KEY_TRACK, "");
             String e = getSharedPreferences(HistoryService.PREF, MODE_PRIVATE)
                     .getString(HistoryService.KEY_LAST_ERROR, "");
+            String storageError = db.getMirrorError();
             status.setText(s);
             track.setText(t.length() == 0 ? "-" : t);
             count.setText(String.valueOf(db.getSessionCount()));
-            error.setText(e.length() == 0 ? "-" : e);
+            storage.setText(db.getMirrorPath());
+            if (storageError != null && storageError.length() > 0) {
+                error.setText("Storage: " + storageError + (e.length() > 0 ? "\nAPI: " + e : ""));
+            } else {
+                error.setText(e.length() == 0 ? "-" : e);
+            }
             handler.postDelayed(this, 1000);
         }
     };
