@@ -2,7 +2,6 @@ package com.kyunghoon.eversolohistory;
 
 import android.content.Context;
 import android.database.Cursor;
-import android.os.Environment;
 
 import java.io.File;
 import java.io.FileWriter;
@@ -14,12 +13,11 @@ public class CsvExporter {
     private static final SimpleDateFormat TS = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US);
 
     public static File export(Context context, HistoryDb db) throws Exception {
-        File root = new File(Environment.getExternalStorageDirectory(), "EversoloHistory");
+        File root = StorageLocator.managerDir(context);
         if (!root.exists() && !root.mkdirs()) {
-            root = new File(context.getExternalFilesDir(null), "EversoloHistory");
-            if (!root.exists()) root.mkdirs();
+            throw new Exception("Cannot create storage folder: " + root.getAbsolutePath());
         }
-        File out = new File(root, "history.csv");
+        File out = new File(root, "play_history.csv");
         FileWriter w = new FileWriter(out, false);
         w.write("id,music_id,title,artist,album,extension,codec,sample_rate,source,started_at,ended_at,listened_sec,max_position_sec,duration_sec,completed,qualified,skipped\n");
         Cursor c = db.allSessions();
