@@ -10,8 +10,8 @@ android {
         applicationId 'com.kyunghoon.eversolohistory.v2'
         minSdk 23
         targetSdk 28
-        versionCode 3
-        versionName '0.2.1-patch'
+        versionCode 4
+        versionName '0.2.2-patch'
     }
 
     buildTypes {
