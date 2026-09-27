@@ -34,13 +34,16 @@ public class HistoryService extends Service {
     private static final String API_LOCAL = "http://127.0.0.1:9529/ZidooMusicControl/v2/getState";
     private static final String API_FALLBACK = "http://192.168.1.9:9529/ZidooMusicControl/v2/getState";
 
+    // v0.2.2: reduce playback API polling from 1 second to 10 seconds.
+    private static final long POLL_SECONDS = 10;
+    private static final long POLL_INTERVAL_MS = POLL_SECONDS * 1000L;
+
     private ScheduledExecutorService executor;
     private HistoryDb db;
     private SharedPreferences prefs;
     private Session current;
-    private boolean previousPollWasPlaying = false;
     private long lastPollElapsed = 0;
-    private long nonPlayingSinceElapsed = 0;
+    private long lastPollWall = 0;
     private PowerManager.WakeLock wakeLock;
 
     @Override
@@ -49,7 +52,7 @@ public class HistoryService extends Service {
         db = new HistoryDb(this);
         prefs = getSharedPreferences(PREF, MODE_PRIVATE);
         createChannel();
-        startForeground(NOTIFY_ID, buildNotification("Monitoring A6 playback"));
+        startForeground(NOTIFY_ID, buildNotification("Monitoring A6 playback · 10 sec"));
         PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "EversoloHistory:Monitor");
         wakeLock.setReferenceCounted(false);
@@ -62,7 +65,7 @@ public class HistoryService extends Service {
         prefs.edit().putBoolean(KEY_ENABLED, true).apply();
         if (executor == null || executor.isShutdown()) {
             executor = Executors.newSingleThreadScheduledExecutor();
-            executor.scheduleAtFixedRate(this::pollSafe, 0, 1, TimeUnit.SECONDS);
+            executor.scheduleWithFixedDelay(this::pollSafe, 0, POLL_SECONDS, TimeUnit.SECONDS);
         }
         return START_STICKY;
     }
@@ -103,8 +106,8 @@ public class HistoryService extends Service {
 
     private void handleState(JSONObject root) throws Exception {
         int state = root.optInt("state", 0);
-        long position = root.optLong("position", 0);
-        long duration = root.optLong("duration", 0);
+        long position = Math.max(0, root.optLong("position", 0));
+        long duration = Math.max(0, root.optLong("duration", 0));
         JSONObject m = root.optJSONObject("playingMusic");
         JSONObject playInfo = root.optJSONObject("everSoloPlayInfo");
 
@@ -118,25 +121,42 @@ public class HistoryService extends Service {
 
             if (current == null) {
                 current = incoming;
-                lastPollElapsed = nowElapsed;
             } else if (!current.identityKey().equals(incomingKey)) {
-                finalizeCurrent(nowWall);
+                // A new track was seen. Estimate when it started from its current
+                // playback position, then close the previous track at that point.
+                // This lets a track changed within the first 10 seconds still be
+                // classified as a skip even though polling itself is only every 10 sec.
+                long incomingAge = Math.min(position, POLL_INTERVAL_MS);
+                long estimatedPreviousEnd = nowWall - incomingAge;
+                if (estimatedPreviousEnd < current.startedAt) estimatedPreviousEnd = nowWall;
+
+                long estimatedListened = Math.max(0, estimatedPreviousEnd - current.startedAt);
+                current.listenedMs = Math.max(current.listenedMs, estimatedListened);
+                finalizeCurrent(estimatedPreviousEnd);
                 current = incoming;
-                lastPollElapsed = nowElapsed;
             } else {
-                if (previousPollWasPlaying && lastPollElapsed > 0) {
-                    long delta = nowElapsed - lastPollElapsed;
-                    if (delta > 0 && delta <= 2500) current.listenedMs += delta;
-                }
+                // No 1-second counter anymore. Use the player's own position as the
+                // lightweight listening-time signal, with a guarded wall-clock fallback.
                 current.durationMs = Math.max(current.durationMs, duration);
                 current.maxPositionMs = Math.max(current.maxPositionMs, position);
-                lastPollElapsed = nowElapsed;
+                current.listenedMs = Math.max(current.listenedMs, position);
+
+                if (lastPollElapsed > 0 && lastPollWall > 0) {
+                    long delta = nowElapsed - lastPollElapsed;
+                    if (delta > 0 && delta <= POLL_INTERVAL_MS + 3000) {
+                        long wallListened = Math.max(0, nowWall - current.startedAt);
+                        current.listenedMs = Math.max(current.listenedMs, wallListened);
+                    }
+                }
             }
 
             current.maxPositionMs = Math.max(current.maxPositionMs, position);
             current.durationMs = Math.max(current.durationMs, duration);
-            previousPollWasPlaying = true;
-            nonPlayingSinceElapsed = 0;
+            current.listenedMs = Math.max(current.listenedMs, position);
+
+            lastPollElapsed = nowElapsed;
+            lastPollWall = nowWall;
+
             prefs.edit()
                     .putString(KEY_STATUS, "Playing")
                     .putString(KEY_TRACK, current.artist + " — " + current.title)
@@ -144,28 +164,23 @@ public class HistoryService extends Service {
             return;
         }
 
-        previousPollWasPlaying = false;
         lastPollElapsed = nowElapsed;
+        lastPollWall = nowWall;
 
-        // Pause: keep the same session open so resume remains one listening session.
+        // Pause: keep the session open. No polling-time accumulation occurs while paused.
         if (state == 4 && current != null) {
-            nonPlayingSinceElapsed = 0;
             prefs.edit().putString(KEY_STATUS, "Paused").apply();
             return;
         }
 
-        // Stop / idle: close after five seconds to avoid transient state changes.
+        // Stop / idle: one confirmed non-playing poll is enough at a 10-second interval.
         if (current != null) {
-            if (nonPlayingSinceElapsed == 0) nonPlayingSinceElapsed = nowElapsed;
-            if (nowElapsed - nonPlayingSinceElapsed >= 5000) {
-                finalizeCurrent(nowWall);
-                nonPlayingSinceElapsed = 0;
-            }
+            finalizeCurrent(nowWall);
         }
         prefs.edit().putString(KEY_STATUS, "Idle").putString(KEY_TRACK, "").apply();
     }
 
-    private Session fromJson(JSONObject m, JSONObject playInfo, long startedAt, long position, long duration) {
+    private Session fromJson(JSONObject m, JSONObject playInfo, long observedAt, long position, long duration) {
         Session s = new Session();
         s.musicId = m.optLong("id", -1);
         s.title = m.optString("title", "");
@@ -174,7 +189,8 @@ public class HistoryService extends Service {
         s.extension = m.optString("extension", "");
         s.codec = m.optString("codec", "");
         s.sampleRate = m.optString("sampleRate", "");
-        s.startedAt = startedAt;
+        s.startedAt = Math.max(0, observedAt - position);
+        s.listenedMs = position;
         s.maxPositionMs = position;
         s.durationMs = duration;
         s.source = playInfo != null ? playInfo.optString("playTypeSubtitle", "") : "";
@@ -183,11 +199,16 @@ public class HistoryService extends Service {
 
     private synchronized void finalizeCurrent(long endedAt) {
         if (current == null) return;
-        current.endedAt = endedAt;
+        current.endedAt = Math.max(endedAt, current.startedAt);
+
+        long elapsed = Math.max(0, current.endedAt - current.startedAt);
+        current.listenedMs = Math.max(current.listenedMs, Math.min(elapsed, Math.max(current.maxPositionMs, elapsed)));
+
         long d = current.durationMs;
         current.completed = d > 0 && current.maxPositionMs >= (long)(d * 0.90);
         current.qualified = current.listenedMs >= 30000 || (d > 0 && current.listenedMs >= (long)(d * 0.50));
         current.skipped = current.listenedMs < 10000;
+
         db.insertSession(current);
         try { CsvExporter.export(this, db); } catch (Exception ignored) {}
         current = null;
