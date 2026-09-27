@@ -71,7 +71,7 @@ public class MainActivity extends Activity {
         root.addView(title);
 
         TextView version = new TextView(this);
-        version.setText("v0.2.1 Patch");
+        version.setText("v0.2.2 Patch");
         version.setTextSize(14);
         version.setTextColor(MUTED);
         version.setPadding(0, dp(2), 0, dp(18));
@@ -232,7 +232,7 @@ public class MainActivity extends Activity {
                 error.setText(e.length() == 0 ? "-" : e);
                 error.setTextColor(e.length() == 0 ? TEXT : Color.rgb(226, 137, 137));
             }
-            handler.postDelayed(this, 1000);
+            handler.postDelayed(this, 5000);
         }
     };
 
