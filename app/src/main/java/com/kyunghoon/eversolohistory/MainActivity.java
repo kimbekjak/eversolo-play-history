@@ -71,14 +71,14 @@ public class MainActivity extends Activity {
         root.addView(title);
 
         TextView version = new TextView(this);
-        version.setText("v0.2.2 Patch");
+        version.setText("v0.2.3 Patch");
         version.setTextSize(14);
         version.setTextColor(MUTED);
         version.setPadding(0, dp(2), 0, dp(18));
         root.addView(version);
 
         TextView sub = new TextView(this);
-        sub.setText("DMP-A6 playback monitor\n127.0.0.1:9529 · fallback 192.168.1.9");
+        sub.setText("DMP-A6 full-play counter\nNo fixed polling during playback");
         sub.setTextSize(14);
         sub.setTextColor(MUTED);
         sub.setLineSpacing(0, 1.15f);
@@ -87,7 +87,7 @@ public class MainActivity extends Activity {
 
         status = field(root, "STATUS");
         track = field(root, "CURRENT TRACK");
-        count = field(root, "SAVED SESSIONS");
+        count = field(root, "FULL PLAYS SAVED");
         storage = field(root, "PERSISTENT DATABASE");
         error = field(root, "LAST ERROR");
 
@@ -124,7 +124,7 @@ public class MainActivity extends Activity {
         root.addView(retryStorage);
 
         TextView note = new TextView(this);
-        note.setText("STORAGE\n/.EversoloManager/play_history.db\n/.EversoloManager/play_history.csv\n\nPLAY RULES\n30 sec or 50% = qualified\nUnder 10 sec = skipped\n90% position = completed");
+        note.setText("STORAGE\n/.EversoloManager/play_history.db\n/.EversoloManager/play_history.csv\n\nV0.2.3 FULL-PLAY RULE\nTrack seen near start + 90% reached = 1 play\nSkipped/incomplete tracks are not saved\nNo fixed polling while a track is playing");
         note.setTextSize(13);
         note.setTextColor(MUTED);
         note.setLineSpacing(0, 1.18f);
